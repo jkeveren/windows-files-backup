@@ -14,12 +14,14 @@ import (
 	"time"
 )
 
-const usage = "Usage: \"quickbooks-backup <directory to store backups> <space seperated list of directories or files to back up>\""
-
 type source struct {
 	path string
 	info os.FileInfo
 }
+
+const usage = "Usage: \"quickbooks-backup <directory to store backups> <space seperated list of directories or files to back up>\""
+
+var blacklist *regexp.Regexp
 
 func main() {
 	// configure logging
@@ -35,6 +37,11 @@ func main() {
 	l := log.New(logFile, "", log.Lshortfile)
 
 	deleteOldBackups := true
+
+	blacklist, err = regexp.Compile("^[A-Z]:(/|\\\\)Users(/|\\\\).+?(/|\\\\)Documents(/|\\\\)My (Music|Pictures|Videos)+")
+	if err != nil {
+		l.Panic(err)
+	}
 
 	// validate args
 	if len(os.Args) < 3 {
@@ -126,6 +133,9 @@ func main() {
 }
 
 func addSrc(w *zip.Writer, srcPath, dstPath string) []error {
+	if blacklist.MatchString(srcPath) {
+		return []error{}
+	}
 	info, err := os.Stat(srcPath)
 	if err != nil {
 		return []error{err}
