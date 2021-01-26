@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,71 +16,82 @@ import (
 )
 
 type source struct {
-	path string
-	info os.FileInfo
+	Path      string
+	Blacklist []string
+	info      os.FileInfo
 }
 
-const usage = "Usage: \"quickbooks-backup <directory to store backups> <space seperated list of directories or files to back up>\""
+const usage = "Usage: \"quickbooks-backup <directory to store backups>\""
 
 var blacklist *regexp.Regexp
 
 func main() {
-	// configure logging
+	deleteOldBackups := true
+
+	// validate arguments
 	if len(os.Args) < 2 {
 		log.Panicf("Not enough arguments. %s", usage)
 	}
+
+	// configure logging
 	dstDirPath := os.Args[1]
-	logFilePath := path.Join(dstDirPath, "backup-log.txt")
+	logFilePath := path.Join(dstDirPath, "log.txt")
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
 	if err != nil {
 		log.Panic(err)
 	}
-	l := log.New(logFile, "", log.Lshortfile)
+	lw := io.MultiWriter(logFile, os.Stdout)
+	l := log.New(lw, "", log.Lshortfile)
 
-	deleteOldBackups := true
-
-	blacklist, err = regexp.Compile("^[A-Z]:(/|\\\\)Users(/|\\\\).+?(/|\\\\)Documents(/|\\\\)My (Music|Pictures|Videos)+")
+	dstDirPath, err = filepath.Abs(dstDirPath) // get absolute path after establishing logs so error can be read from file
 	if err != nil {
 		l.Panic(err)
 	}
 
-	// validate args
-	if len(os.Args) < 3 {
-		l.Panicf("Not enough arguments. %s", usage)
+	// get sources
+	sourcesJSON, err := ioutil.ReadFile(path.Join(dstDirPath, "sources.json"))
+	if err != nil {
+		l.Panic(err)
+	}
+	sources := make([]source, 0)
+	err = json.Unmarshal(sourcesJSON, &sources)
+	if err != nil {
+		l.Print(err)
+		deleteOldBackups = false
 	}
 
-	// validate sources
-	sources := make([]source, 0)
-	for _, p := range os.Args[2:] {
-		absPath, err := filepath.Abs(p) // Use absolute path for printing
+	// transform and validate sources before creating backup zip
+	for i := range sources {
+		source := &sources[i]
+		// Use absolute path for printing
+		absPath, err := filepath.Abs(source.Path)
 		if err != nil {
 			l.Print(err)
 			deleteOldBackups = false
-			continue
+		} else {
+			source.Path = absPath
 		}
-		info, err := os.Stat(absPath)
+		// validate that path exists
+		info, err := os.Stat(source.Path)
 		if err != nil {
 			l.Print(err)
 			deleteOldBackups = false
-			continue
+		} else {
+			source.info = info
 		}
-		source := source{
-			path: absPath,
-			info: info,
-		}
-		sources = append(sources, source)
 	}
 
 	// name destination
-	dstDirPath, err = filepath.Abs(dstDirPath)
-	if err != nil {
-		l.Panic(err)
-	}
 	t := time.Now().UTC()
-	dstName := fmt.Sprintf("%d_UTC-%d-%d-%d.zip", t.Unix(), t.Year(), t.Month(), t.Day())
-	dstFilePath := path.Join(dstDirPath, dstName)
+	dstFileName := fmt.Sprintf("%d_UTC-%d-%d-%d.zip", t.Unix(), t.Year(), t.Month(), t.Day())
+	backupDirPath := path.Join(dstDirPath, "backups")
+	dstFilePath := path.Join(backupDirPath, dstFileName)
 
 	// create zip
+	err = os.Mkdir(backupDirPath, os.ModeDir)
+	if err != nil && !os.IsExist(err) {
+		l.Panic(err)
+	}
 	dstFile, err := os.Create(dstFilePath)
 	if err != nil {
 		l.Panic(err)
@@ -90,22 +102,20 @@ func main() {
 
 	// add files to zip
 	for i, source := range sources {
-		baseName := filepath.Base(source.path)
-		errs := addSrc(dstZip, source.path, fmt.Sprintf("Source %d: %s", i+1, baseName)) // include number for simple collision prevention
+		baseName := filepath.Base(source.Path)
+		errs := addSrc(dstZip, source.Path, fmt.Sprintf("source-%d:-%s", i+1, baseName), source.Blacklist) // include number for simple collision prevention
 		for _, err := range errs {
 			l.Print(err)
 			deleteOldBackups = false
 		}
 	}
 
-	defer l.Print("Done.")
-
 	// delete old logs
 	if !deleteOldBackups {
 		l.Panic("Errors occurred. Old backups will not be deleted automatically.")
 	}
 	format := "Unable to delete old backups: %s"
-	dstDirInfos, err := ioutil.ReadDir(dstDirPath)
+	backupInfos, err := ioutil.ReadDir(backupDirPath)
 	if err != nil {
 		l.Panicf(format, err)
 	}
@@ -114,27 +124,38 @@ func main() {
 		l.Printf(format, err)
 	}
 	backupNames := make([]string, 0)
-	for _, info := range dstDirInfos {
+	for _, info := range backupInfos {
 		name := info.Name()
 		if backupReg.MatchString(name) {
 			backupNames = append(backupNames, name)
 		}
 	}
 	sort.Strings(backupNames)
-	oldBackupNames := backupNames[:len(backupNames)-3]
+	deleteCount := len(backupNames) - 3
+	if deleteCount < 0 {
+		deleteCount = 0
+	}
+	oldBackupNames := backupNames[:deleteCount]
 	for _, name := range oldBackupNames {
 		l.Printf("Deleting old backup %q", name)
-		err := os.Remove(path.Join(dstDirPath, name))
+		err := os.Remove(path.Join(backupDirPath, name))
 		if err != nil {
 			l.Print(err)
 		}
 	}
 
+	l.Print("Done.")
 }
 
-func addSrc(w *zip.Writer, srcPath, dstPath string) []error {
-	if blacklist.MatchString(srcPath) {
-		return []error{}
+func addSrc(w *zip.Writer, srcPath, dstPath string, blacklist []string) []error {
+	for _, pattern := range blacklist {
+		match, err := filepath.Match(pattern, filepath.Base(srcPath))
+		if err != nil {
+			return []error{err}
+		}
+		if match {
+			return []error{}
+		}
 	}
 	info, err := os.Stat(srcPath)
 	if err != nil {
@@ -150,7 +171,7 @@ func addSrc(w *zip.Writer, srcPath, dstPath string) []error {
 			name := info.Name()
 			childSrcPath := path.Join(srcPath, name)
 			childDstPath := path.Join(dstPath, name)
-			childErrs := addSrc(w, childSrcPath, childDstPath)
+			childErrs := addSrc(w, childSrcPath, childDstPath, blacklist)
 			for _, err := range childErrs {
 				errs = append(errs, err)
 			}
