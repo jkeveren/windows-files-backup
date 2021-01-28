@@ -31,8 +31,6 @@ type configuration struct {
 	Sources        []source
 }
 
-// var blacklist *regexp.Regexp
-
 func main() {
 	e := errorHandler{
 		logger: log.New(os.Stdout, "", 0),
