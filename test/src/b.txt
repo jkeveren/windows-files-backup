@@ -1,1 +1,1 @@
-bb
+this is "b.txt"

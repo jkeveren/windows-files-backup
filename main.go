@@ -32,73 +32,78 @@ type configuration struct {
 }
 
 func main() {
+	// Set up error handler
 	e := errorHandler{
 		logger: log.New(os.Stdout, "", 0),
 	}
 	var config configuration
 	defer e.report(&config)
 
-	// validate args
+	// Validate CLI args
 	if len(os.Args) < 2 {
-		// don't panic because no trace is required
+		// Don't panic because no trace is required.
 		e.print(errors.New("Not enough arguments. Usage: \"backup <directory to store backups>\""))
 		return
 	}
 
 	dstDirPath := os.Args[1]
 
+	// Configure logger
 	l, err := configureLogger(dstDirPath)
 	e.panicIfErr(err)
 	e.logger = l
 
-	dstDirPath, err = filepath.Abs(dstDirPath) // get absolute path after establishing logs so error can be written to file
+	// Get absolute path after establishing logs so error can be written to file.
+	dstDirPath, err = filepath.Abs(dstDirPath)
 	e.panicIfErr(err)
 
-	// get config
+	// Parse config
 	configJSON, err := ioutil.ReadFile(path.Join(dstDirPath, "config.json"))
 	e.panicIfErr(err)
 	err = json.Unmarshal(configJSON, &config)
 	e.panicIfErr(err)
 
-	// transform and validate sources before creating backup zip
+	// Transform and validate sources before creating backup zip
 	for i := range config.Sources {
 		source := &config.Sources[i]
-		// Use absolute path for printing
-		absPath, err := filepath.Abs(source.Path)
+		// Use absolute path for better logs.
+		absPath, err := filepath.Abs(filepath.Join(dstDirPath, source.Path))
 		if err != nil {
 			e.print(err)
-			// TODO: remove bad source
+			// TODO: remove bad source from in memory config.
 			continue
 		}
 		source.Path = absPath
-		// validate that path exists
+		// Validate that path exists
 		info, err := os.Stat(source.Path)
 		if err != nil {
 			e.print(err)
-			// TODO: remove bad source
+			// TODO: remove bad source from in memory config.
 			continue
 		}
 		source.info = info
 	}
 
-	// name destination
+	// Create destination file name.
 	t := time.Now().UTC()
 	dstFileName := fmt.Sprintf("%d_UTC-%d-%d-%d.zip", t.Unix(), t.Year(), t.Month(), t.Day())
-	backupDirPath := path.Join(dstDirPath, "backups")
-	dstFilePath := path.Join(backupDirPath, dstFileName)
+	backupsDirPath := path.Join(dstDirPath, "backups")
+	dstFilePath := path.Join(backupsDirPath, dstFileName)
 
-	// create zip
-	err = os.Mkdir(backupDirPath, os.ModeDir)
+	// Create backup dir if not exist.
+	err = os.Mkdir(backupsDirPath, os.ModeDir|os.ModePerm)
 	if err != nil && !os.IsExist(err) {
 		e.panic(err)
 	}
+
+	// Create destination file.
 	dstFile, err := os.Create(dstFilePath)
 	e.panicIfErr(err)
 	defer dstFile.Close()
 	dstZip := zip.NewWriter(dstFile)
 	defer dstZip.Close()
 
-	// add files to zip
+	// Add sources to destination file.
 	for i, source := range config.Sources {
 		baseName := filepath.Base(source.Path)
 		errs := addSrc(dstZip, source.Path, fmt.Sprintf("source-%d:-%s", i+1, baseName), source.Blacklist) // include number for simple collision prevention
@@ -107,12 +112,12 @@ func main() {
 		}
 	}
 
-	// delete old logs
+	// Delete old backups.
 	if len(e.errs) > 0 {
 		e.panic(errors.New("Errors occurred. Old backups will not be deleted automatically."))
 	}
 	format := "Unable to delete old backups: %s "
-	backupInfos, err := ioutil.ReadDir(backupDirPath)
+	backupInfos, err := ioutil.ReadDir(backupsDirPath)
 	if err != nil {
 		e.panic(errors.New(format + err.Error()))
 	}
@@ -135,7 +140,7 @@ func main() {
 	oldBackupNames := backupNames[:deleteCount]
 	for _, name := range oldBackupNames {
 		l.Printf("Deleting old backup %q", name)
-		err := os.Remove(path.Join(backupDirPath, name))
+		err := os.Remove(path.Join(backupsDirPath, name))
 		e.printIfErr(err)
 	}
 
@@ -169,19 +174,25 @@ func (e *errorHandler) panicIfErr(err error) {
 	}
 }
 
+// Reports errors via email.
 func (e *errorHandler) report(config *configuration) {
+	// Only report if errors occurred.
 	if len(e.errs) == 0 {
 		return
 	}
+
 	if config.SendGridAPIKey == "" {
 		e.logger.Panic("No SendGrid API key for report email.")
 	}
+
+	// Concat all errors that occured.
 	var errorsString string
 	for _, err := range e.errs {
 		errorsString += err.Error() + "\n"
 	}
 	message := fmt.Sprintf("Errors occured while backing up %s:\n%s", config.Name, errorsString)
 
+	// Create SendGrid request body.
 	requestBodyString := `{
 		"personalizations": [{"to": [{
 			"email": "james@keve.ren"
@@ -194,6 +205,7 @@ func (e *errorHandler) report(config *configuration) {
 		}]
 	}`
 
+	// Make SendGrid request.
 	request, err := http.NewRequest("POST", "https://api.sendgrid.com/v3/mail/send", strings.NewReader(requestBodyString))
 	if err != nil {
 		e.logger.Panic(err)
@@ -205,17 +217,20 @@ func (e *errorHandler) report(config *configuration) {
 	if err != nil {
 		e.logger.Panic(err)
 	}
-	// if status code is not 2xx
+	// If status code is not 2xx.
 	if response.StatusCode/100 != 2 {
+		// Read body
 		responseBody, err := ioutil.ReadAll(response.Body)
-		// not critical; ignore errors
 		if err != nil {
+			// Not critical; use failover body.
 			responseBody = []byte("Error retrieving response body")
 		}
+		// Print SendGrid error.
 		e.logger.Panic(errors.New(fmt.Sprintf("SendGrid returned non-200 status code \"%d\".\n\nReponse body: \"%s\".\n\nRequest body: \"%s\"", response.StatusCode, string(responseBody), requestBodyString)))
 	}
 }
 
+// Create logger that writes to file and stdout.
 func configureLogger(dstDirPath string) (*log.Logger, error) {
 	logFilePath := path.Join(dstDirPath, "log.txt")
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
@@ -227,6 +242,7 @@ func configureLogger(dstDirPath string) (*log.Logger, error) {
 	return l, nil
 }
 
+// Backs up everything in `srcPath` to zip using `w`.
 func addSrc(w *zip.Writer, srcPath, dstPath string, blacklist []string) []error {
 	for _, pattern := range blacklist {
 		match, err := filepath.Match(pattern, filepath.Base(srcPath))
