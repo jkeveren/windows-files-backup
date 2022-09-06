@@ -22,13 +22,21 @@ import (
 type source struct {
 	Path      string
 	Blacklist []string
-	info      os.FileInfo
+}
+
+type Contact struct {
+	Name string
+	Email string
 }
 
 type configuration struct {
-	Name           string
-	SendGridAPIKey string
-	Sources        []source
+	Name              string
+	ErrorContacts     []Contact
+	SendGridAPIKey    string
+	UseSendGrid       bool
+	SalesScribeAPIKey string
+	UseSalesScribe    bool
+	Sources           []source
 }
 
 func main() {
@@ -63,27 +71,6 @@ func main() {
 	err = json.Unmarshal(configJSON, &config)
 	e.panicIfErr(err)
 
-	// Transform and validate sources before creating backup zip
-	for i := range config.Sources {
-		source := &config.Sources[i]
-		// Use absolute path for better logs.
-		absPath, err := filepath.Abs(filepath.Join(dstDirPath, source.Path))
-		if err != nil {
-			e.print(err)
-			// TODO: remove bad source from in memory config.
-			continue
-		}
-		source.Path = absPath
-		// Validate that path exists
-		info, err := os.Stat(source.Path)
-		if err != nil {
-			e.print(err)
-			// TODO: remove bad source from in memory config.
-			continue
-		}
-		source.info = info
-	}
-
 	// Create destination file name.
 	t := time.Now().UTC()
 	dstFileName := fmt.Sprintf("%d_UTC-%d-%d-%d.zip", t.Unix(), t.Year(), t.Month(), t.Day())
@@ -105,6 +92,7 @@ func main() {
 
 	// Add sources to destination file.
 	for i, source := range config.Sources {
+		source.Path = filepath.Join(dstDirPath, source.Path)
 		baseName := filepath.Base(source.Path)
 		errs := addSrc(dstZip, source.Path, fmt.Sprintf("source-%d:-%s", i+1, baseName), source.Blacklist) // include number for simple collision prevention
 		for _, err := range errs {
@@ -238,7 +226,7 @@ func configureLogger(dstDirPath string) (*log.Logger, error) {
 		return nil, err
 	}
 	lw := io.MultiWriter(logFile, os.Stdout)
-	l := log.New(lw, "", log.Lshortfile)
+	l := log.New(lw, "", log.Ltime|log.Ldate|log.Lshortfile)
 	return l, nil
 }
 
