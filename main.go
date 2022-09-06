@@ -25,18 +25,19 @@ type source struct {
 }
 
 type Contact struct {
-	Name string
-	Email string
+	Name  string `json:"name"`
+	Email string `json:"email"`
 }
 
 type configuration struct {
-	Name              string
-	ErrorContacts     []Contact
-	SendGridAPIKey    string
-	UseSendGrid       bool
-	SalesScribeAPIKey string
-	UseSalesScribe    bool
-	Sources           []source
+	Name                string
+	SendGridEnable      bool
+	SendGridAPIKey      string
+	SendGridFromAddress string
+	SalesScribeAPIKey   string
+	SalesScribeEnable   bool
+	ErrorContacts       []Contact
+	Sources             []source
 }
 
 func main() {
@@ -169,52 +170,59 @@ func (e *errorHandler) report(config *configuration) {
 		return
 	}
 
-	if config.SendGridAPIKey == "" {
-		e.logger.Panic("No SendGrid API key for report email.")
-	}
-
-	// Concat all errors that occured.
-	var errorsString string
-	for _, err := range e.errs {
-		errorsString += err.Error() + "\n"
-	}
-	message := fmt.Sprintf("Errors occured while backing up %s:\n%s", config.Name, errorsString)
-
-	// Create SendGrid request body.
-	requestBodyString := `{
-		"personalizations": [{"to": [{
-			"email": "james@keve.ren"
-		}]}],
-		"from": {"email": "james@keve.ren"},
-		"subject": ` + strconv.Quote("Errors while backing up "+config.Name) + `,
-		"content": [{
-			"type": "text/plain",
-			"value": ` + strconv.Quote(message) + `
-		}]
-	}`
-
-	// Make SendGrid request.
-	request, err := http.NewRequest("POST", "https://api.sendgrid.com/v3/mail/send", strings.NewReader(requestBodyString))
-	if err != nil {
-		e.logger.Panic(err)
-	}
-	request.Header.Set("authorization", "Bearer "+config.SendGridAPIKey)
-	request.Header.Set("content-type", "application/json")
-	httpClient := &http.Client{}
-	response, err := httpClient.Do(request)
-	if err != nil {
-		e.logger.Panic(err)
-	}
-	// If status code is not 2xx.
-	if response.StatusCode/100 != 2 {
-		// Read body
-		responseBody, err := ioutil.ReadAll(response.Body)
-		if err != nil {
-			// Not critical; use failover body.
-			responseBody = []byte("Error retrieving response body")
+	if (config.SendGridEnable) {
+		if config.SendGridAPIKey == "" {
+			e.logger.Panic("No SendGrid API key for report email.")
 		}
-		// Print SendGrid error.
-		e.logger.Panic(errors.New(fmt.Sprintf("SendGrid returned non-200 status code \"%d\".\n\nReponse body: \"%s\".\n\nRequest body: \"%s\"", response.StatusCode, string(responseBody), requestBodyString)))
+
+		// Marshal contacts.
+		contactsBytes, err := json.Marshal(config.ErrorContacts)
+		if err != nil {
+			e.logger.Panic(err)
+		}
+		contactsString := string(contactsBytes)
+
+		// Concat all errors that occured.
+		var errorsString string
+		for _, err := range e.errs {
+			errorsString += err.Error() + "\n"
+		}
+		message := fmt.Sprintf("Errors occured while backing up %s:\n%s", config.Name, errorsString)
+
+		// Create SendGrid request body.
+		requestBodyString := `{
+			"personalizations": [{"to": ` + contactsString + `}],
+			"from": {"email": "` + config.SendGridFromAddress + `"},
+			"subject": "Errors while backing up ` + config.Name + `",
+			"content": [{
+				"type": "text/plain",
+				"value": ` + strconv.Quote(message) + `
+			}]
+		}`
+
+		// Make SendGrid request.
+		request, err := http.NewRequest("POST", "https://api.sendgrid.com/v3/mail/send", strings.NewReader(requestBodyString))
+		if err != nil {
+			e.logger.Panic(err)
+		}
+		request.Header.Set("authorization", "Bearer "+config.SendGridAPIKey)
+		request.Header.Set("content-type", "application/json")
+		httpClient := &http.Client{}
+		response, err := httpClient.Do(request)
+		if err != nil {
+			e.logger.Panic(err)
+		}
+		// If status code is not 2xx.
+		if response.StatusCode/100 != 2 {
+			// Read body
+			responseBody, err := ioutil.ReadAll(response.Body)
+			if err != nil {
+				// Not critical; use failover body.
+				responseBody = []byte("Error retrieving response body")
+			}
+			// Print SendGrid error.
+			e.logger.Panic(errors.New(fmt.Sprintf("SendGrid returned non-200 status code \"%d\".\n\nReponse body: \"%s\".\n\nRequest body: \"%s\"", response.StatusCode, string(responseBody), requestBodyString)))
+		}
 	}
 }
 
@@ -225,8 +233,8 @@ func configureLogger(dstDirPath string) (*log.Logger, error) {
 	if err != nil {
 		return nil, err
 	}
-	lw := io.MultiWriter(logFile, os.Stdout)
-	l := log.New(lw, "", log.Ltime|log.Ldate|log.Lshortfile)
+	// lw := io.MultiWriter(logFile, os.Stdout)
+	l := log.New(logFile, "", log.Ltime|log.Ldate|log.Lshortfile)
 	return l, nil
 }
 

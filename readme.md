@@ -17,6 +17,11 @@ Contents:
 	```json
 	{
 		"name": "test", // Name of the backup. This will be used in any error report emails (Useful for backups on multiple machines).
+		"sendGridEnable": true, // flag to enable sending error reports with SendGrid.
+		"sendGridAPIKey": "YOUR_SENDGRID_API_KEY",
+		"sendGridFromAddress": "example@example.com", // Address to send emails from with SendGrid.
+		"salesScribeEnable": true, // flag to enable sending error reports with SalesScribe.
+		"salesScribeAPIKey": "YOUR_SALESSCRIBE_API_KEY",
 		"errorContacts": [ // Contacts to email when an error occurs.
 			{
 				"name": "James Keveren",
@@ -27,10 +32,6 @@ Contents:
 				"email": "example@example.com"
 			}
 		],
-		"sendGridAPIKey": "YOUR_SENDGRID_API_KEY",
-		"useSendGrid": true, // flag to enable sending error reports with SendGrid.
-		"salesScribeAPIKey": "YOUR_SALESSCRIBE_API_KEY",
-		"useSalesScribe": true, // flag to enable sending error reports with SalesScribe.
 		"sources": [ // Paths to back up.
 			{
 				"path": "../src", // Path to back up (relative to the config directory).
