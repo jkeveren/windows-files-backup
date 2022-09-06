@@ -1,2 +1,6 @@
-/test/dst/*
-/backup.exe
+*
+
+!go.mod
+!main.go
+!Backup.xml
+!test
