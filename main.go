@@ -204,8 +204,6 @@ func (e *errorHandler) report(config *configuration) {
 			}
 		}
 
-		fmt.Printf("%#v\n", contacts);
-
 		// Marshal contacts.
 		contactsBytes, err := json.MarshalIndent(contacts, "", "\t")
 		if err != nil {
@@ -218,8 +216,6 @@ func (e *errorHandler) report(config *configuration) {
 			"DynamicDataJson": ` + strconv.Quote(`{"email": ` + strconv.Quote(config.ErrorContacts[0].Email) + `, "fullName": ` + strconv.Quote(config.ErrorContacts[0].Name) + `, "subject": ` + subject + `, "message": ` + message + `}`) + `,
 			"ToAddresses": ` + contactsString + `
 		}`
-
-		fmt.Printf(requestBodyString);
 
 		// Make SendGrid request.
 		request, err := http.NewRequest("POST", "https://integrate.salesscribe.com/v1", strings.NewReader(requestBodyString))
@@ -302,8 +298,8 @@ func configureLogger(dstDirPath string) (*log.Logger, error) {
 	if err != nil {
 		return nil, err
 	}
-	// lw := io.MultiWriter(logFile, os.Stdout)
-	l := log.New(logFile, "", log.Ltime|log.Ldate|log.Lshortfile)
+	lw := io.MultiWriter(logFile, os.Stdout)
+	l := log.New(lw, "", log.Ltime|log.Ldate|log.Lshortfile)
 	return l, nil
 }
 
