@@ -46,7 +46,7 @@ func main() {
 		logger: log.New(os.Stdout, "", 0),
 	}
 	var config configuration
-	defer e.report(&config)
+	defer report(&e, &config)
 
 	// Validate CLI args
 	if len(os.Args) < 2 {
@@ -169,7 +169,7 @@ type salesScribeContact struct {
 }
 
 // Reports errors via email.
-func (e *errorHandler) report(config *configuration) {
+func report(e *errorHandler, config *configuration) {
 	if len(config.ErrorContacts) == 0 {
 		e.logger.Print("Warning: No error contacts were specified.")
 		return
@@ -191,104 +191,123 @@ func (e *errorHandler) report(config *configuration) {
 	message := strconv.Quote(fmt.Sprintf("Errors occurred while backing up %s:\n%s", config.Name, errorsString))
 
 	if config.SalesScribeEnable {
-		if config.SalesScribeAPIKey == "" {
-			e.logger.Panic("No SalesScribe API key for report email.")
-		}
-
-		contactCount := len(config.ErrorContacts)
-		contacts := make([]salesScribeContact, contactCount, contactCount)
-		for i, contact := range config.ErrorContacts {
-			contacts[i] = salesScribeContact{
-				Name:    contact.Name,
-				Address: contact.Email,
-			}
-		}
-
-		// Marshal contacts.
-		contactsBytes, err := json.MarshalIndent(contacts, "", "\t")
+		e.logger.Print("Sending error email via SalesScribe.")
+		err := salesScribe(config, subject, message)
 		if err != nil {
-			e.logger.Panic(err)
-		}
-		contactsString := string(contactsBytes)
-
-		// Create SendGrid request body.
-		requestBodyString := `{
-			"DynamicDataJson": ` + strconv.Quote(`{"email": ` + strconv.Quote(config.ErrorContacts[0].Email) + `, "fullName": ` + strconv.Quote(config.ErrorContacts[0].Name) + `, "subject": ` + subject + `, "message": ` + message + `}`) + `,
-			"ToAddresses": ` + contactsString + `
-		}`
-
-		// Make SendGrid request.
-		request, err := http.NewRequest("POST", "https://integrate.salesscribe.com/v1", strings.NewReader(requestBodyString))
-		if err != nil {
-			e.logger.Panic(err)
-		}
-		request.Header.Set("ApiKey2", config.SalesScribeAPIKey)
-		request.Header.Set("content-type", "application/json")
-		httpClient := &http.Client{}
-		response, err := httpClient.Do(request)
-		if err != nil {
-			e.logger.Panic(err)
-		}
-		// If status code is not 2xx.
-		if response.StatusCode/100 != 2 {
-			// Read body
-			responseBody, err := ioutil.ReadAll(response.Body)
-			if err != nil {
-				// Not critical; use failover body.
-				responseBody = []byte("Error retrieving response body")
-			}
-			// Print SendGrid error.
-			e.logger.Panic(errors.New(fmt.Sprintf("SalesScribe returned non-200 status code \"%d\".\n\nReponse body: \"%s\".\n\nRequest body: \"%s\"", response.StatusCode, string(responseBody), requestBodyString)))
+			e.logger.Print(err.Error());
 		}
 	}
 
 	if config.SendGridEnable {
-		if config.SendGridAPIKey == "" {
-			e.logger.Panic("No SendGrid API key for report email.")
-		}
-
-		// Marshal contacts.
-		contactsBytes, err := json.Marshal(config.ErrorContacts)
+		e.logger.Print("Sending error email via SendGrid.")
+		err := sendGrid(config, subject, message)
 		if err != nil {
-			e.logger.Panic(err)
-		}
-		contactsString := string(contactsBytes)
-
-		// Create SendGrid request body.
-		requestBodyString := `{
-			"personalizations": [{"to": ` + contactsString + `}],
-			"from": {"email": ` + strconv.Quote(config.SendGridFromAddress) + `},
-			"subject": ` + subject + `,
-			"content": [{
-				"type": "text/plain",
-				"value": ` + message + `
-			}]
-		}`
-
-		// Make SendGrid request.
-		request, err := http.NewRequest("POST", "https://api.sendgrid.com/v3/mail/send", strings.NewReader(requestBodyString))
-		if err != nil {
-			e.logger.Panic(err)
-		}
-		request.Header.Set("authorization", "Bearer "+config.SendGridAPIKey)
-		request.Header.Set("content-type", "application/json")
-		httpClient := &http.Client{}
-		response, err := httpClient.Do(request)
-		if err != nil {
-			e.logger.Panic(err)
-		}
-		// If status code is not 2xx.
-		if response.StatusCode/100 != 2 {
-			// Read body
-			responseBody, err := ioutil.ReadAll(response.Body)
-			if err != nil {
-				// Not critical; use error body.
-				responseBody = []byte("Error reading response body")
-			}
-			// Print SendGrid error.
-			e.logger.Panic(errors.New(fmt.Sprintf("SendGrid returned non-200 status code \"%d\".\n\nReponse body: \"%s\".\n\nRequest body: \"%s\"", response.StatusCode, string(responseBody), requestBodyString)))
+			e.logger.Print(err.Error())
 		}
 	}
+}
+
+func salesScribe(config *configuration, subject, message string) error {
+	if config.SalesScribeAPIKey == "" {
+		return errors.New("No SalesScribe API key for report email.");
+	}
+
+	contactCount := len(config.ErrorContacts)
+	contacts := make([]salesScribeContact, contactCount, contactCount)
+	for i, contact := range config.ErrorContacts {
+		contacts[i] = salesScribeContact{
+			Name:    contact.Name,
+			Address: contact.Email,
+		}
+	}
+
+	// Marshal contacts.
+	contactsBytes, err := json.MarshalIndent(contacts, "", "\t")
+	if err != nil {
+		return err
+	}
+	contactsString := string(contactsBytes)
+
+	// Create SendGrid request body.
+	requestBodyString := `{
+		"DynamicDataJson": ` + strconv.Quote(`{"email": ` + strconv.Quote(config.ErrorContacts[0].Email) + `, "fullName": ` + strconv.Quote(config.ErrorContacts[0].Name) + `, "subject": ` + subject + `, "message": ` + message + `}`) + `,
+		"ToAddresses": ` + contactsString + `
+	}`
+
+	// Make SendGrid request.
+	request, err := http.NewRequest("POST", "https://integrate.salesscribe.com/v1", strings.NewReader(requestBodyString))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("ApiKey2", config.SalesScribeAPIKey)
+	request.Header.Set("content-type", "application/json")
+	httpClient := &http.Client{}
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	// If status code is not 2xx.
+	if response.StatusCode/100 != 2 {
+		// Read body
+		responseBody, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			// Not critical; use failover body.
+			responseBody = []byte("Error retrieving response body")
+		}
+		return errors.New(fmt.Sprintf("SalesScribe returned non-200 status code \"%d\".\n\nReponse body: \"%s\".\n\nRequest body: \"%s\"", response.StatusCode, string(responseBody), requestBodyString))
+	}
+
+	return nil
+}
+
+func sendGrid(config *configuration, subject, message string) error {
+	if config.SendGridAPIKey == "" {
+		return errors.New("No SendGrid API key for report email.")
+	}
+
+	// Marshal contacts.
+	contactsBytes, err := json.Marshal(config.ErrorContacts)
+	if err != nil {
+		return err
+	}
+	contactsString := string(contactsBytes)
+
+	// Create SendGrid request body.
+	requestBodyString := `{
+		"personalizations": [{"to": ` + contactsString + `}],
+		"from": {"email": ` + strconv.Quote(config.SendGridFromAddress) + `},
+		"subject": ` + subject + `,
+		"content": [{
+			"type": "text/plain",
+			"value": ` + message + `
+		}]
+	}`
+
+	// Make SendGrid request.
+	request, err := http.NewRequest("POST", "https://api.sendgrid.com/v3/mail/send", strings.NewReader(requestBodyString))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("authorization", "Bearer "+config.SendGridAPIKey)
+	request.Header.Set("content-type", "application/json")
+	httpClient := &http.Client{}
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	// If status code is not 2xx.
+	if response.StatusCode/100 != 2 {
+		// Read body
+		responseBody, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			// Not critical; use error body.
+			responseBody = []byte("Error reading response body")
+		}
+		// Print SendGrid error.
+		return errors.New(fmt.Sprintf("SendGrid returned non-200 status code \"%d\".\n\nReponse body: \"%s\".\n\nRequest body: \"%s\"", response.StatusCode, string(responseBody), requestBodyString))
+	}
+
+	return nil
 }
 
 // Create logger that writes to file and stdout.
