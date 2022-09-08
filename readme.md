@@ -34,14 +34,14 @@ Contents:
 		],
 		"sources": [ // Paths to back up.
 			{
-				"path": "../src", // Path to back up (relative to the config directory).
+				"path": "C:\\whatever", // Path to back up (Don't forget to escape backslashes).
 				"blacklist": [ // Files not to back up.
 					"*.bad",
 					"blacklisted-dir"
 				]
 			},
 			{
-				"path": "../src2",
+				"path": "C:\\whatever2",
 				"blacklist": [
 					"*.not-good"
 				]

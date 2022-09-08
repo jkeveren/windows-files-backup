@@ -93,7 +93,6 @@ func main() {
 
 	// Add sources to destination file.
 	for i, source := range config.Sources {
-		source.Path = filepath.Join(dstDirPath, source.Path)
 		baseName := filepath.Base(source.Path)
 		errs := addSrc(dstZip, source.Path, fmt.Sprintf("source-%d:-%s", i+1, baseName), source.Blacklist) // include number for simple collision prevention
 		for _, err := range errs {
